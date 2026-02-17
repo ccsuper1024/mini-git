@@ -1,0 +1,30 @@
+# 通用编辑器/系统临时文件
+*.swp
+*.swo
+*~
+.DS_Store
+
+# CMake 构建产物
+/build/
+/CMakeCache.txt
+/CMakeFiles/
+/cmake-build-*/
+/*.cmake
+
+# 编译生成的二进制/库文件
+*.o
+*.obj
+*.a
+*.so
+*.dll
+*.dylib
+/*.exe
+/minigit_cli
+/minigit_tests
+
+# 日志和临时输出
+*.log
+
+# mini-git 自身的数据目录
+/.minigit/
+
