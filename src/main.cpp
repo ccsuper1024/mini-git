@@ -16,6 +16,7 @@
 #include "object_store.h"
 #include "refs.h"
 #include "tree.h"
+#include <set>
 
 // 本文件实现 mini-git 命令行入口及子命令分发
 namespace {
@@ -348,9 +349,151 @@ int command_commit(int argc, char** argv) {
     return 0;
 }
 }  // namespace
+// 实现 merge 子命令：与指定提交或分支进行三方合并并生成 merge commit
+static bool read_commit(minigit::ObjectStore& store, const std::string& h, minigit::Commit& c) {
+    std::string body;
+    if (!store.read_object(h, body)) return false;
+    return minigit::parse_commit_object(body, c);
+}
+
+static std::string resolve_target_commit_hash(minigit::FileSystem& fs, const std::string& arg) {
+    if (arg.size() == 40U) {
+        return arg;
+    }
+    std::string refname = "refs/heads/" + arg;
+    std::string hash;
+    if (minigit::read_ref(fs, refname, hash)) {
+        return hash;
+    }
+    return std::string();
+}
+
+static std::string find_common_ancestor(minigit::ObjectStore& store,
+                                        const std::string& a,
+                                        const std::string& b) {
+    std::vector<std::string> queue;
+    std::vector<std::string> aq;
+    aq.push_back(a);
+    std::set<std::string> Aanc;
+    while (!aq.empty()) {
+        std::string x = aq.back();
+        aq.pop_back();
+        if (Aanc.count(x)) continue;
+        Aanc.insert(x);
+        minigit::Commit c;
+        if (!read_commit(store, x, c)) continue;
+        for (const auto& p : c.parents) {
+            aq.push_back(p);
+        }
+    }
+    queue.push_back(b);
+    std::set<std::string> visited;
+    while (!queue.empty()) {
+        std::string y = queue.back();
+        queue.pop_back();
+        if (visited.count(y)) continue;
+        visited.insert(y);
+        if (Aanc.count(y)) return y;
+        minigit::Commit c;
+        if (!read_commit(store, y, c)) continue;
+        for (const auto& p : c.parents) {
+            queue.push_back(p);
+        }
+    }
+    return std::string();
+}
+
+int command_merge(int argc, char** argv) {
+    if (argc != 3) {
+        std::cerr << "usage: mini-git merge <commit|branch>\n";
+        return 1;
+    }
+    std::string arg = argv[2];
+    minigit::FileSystem fs(".minigit");
+    minigit::ObjectStore store(".minigit");
+    minigit::Head head;
+    if (!minigit::read_head(fs, head)) {
+        std::cerr << "HEAD is not set\n";
+        return 1;
+    }
+    std::string ours_commit;
+    if (head.symbolic) {
+        if (!minigit::read_ref(fs, head.target, ours_commit) || ours_commit.empty()) {
+            std::cerr << "current branch has no commit\n";
+            return 1;
+        }
+    } else {
+        ours_commit = head.target;
+    }
+    std::string theirs_commit = resolve_target_commit_hash(fs, arg);
+    if (theirs_commit.empty()) {
+        std::cerr << "unknown revision: " << arg << "\n";
+        return 1;
+    }
+    minigit::Commit oc, tc;
+    if (!read_commit(store, ours_commit, oc) || !read_commit(store, theirs_commit, tc)) {
+        std::cerr << "failed to read commits\n";
+        return 1;
+    }
+    std::string base = find_common_ancestor(store, ours_commit, theirs_commit);
+    std::vector<minigit::IndexEntry> ibase, iours, itheirs;
+    if (!base.empty()) {
+        minigit::Commit bc;
+        if (!read_commit(store, base, bc)) {
+            std::cerr << "failed to read base commit\n";
+            return 1;
+        }
+        if (!minigit::flatten_tree_to_index(store, bc.tree, ibase)) {
+            std::cerr << "failed to flatten base tree\n";
+            return 1;
+        }
+    }
+    if (!minigit::flatten_tree_to_index(store, oc.tree, iours)) {
+        std::cerr << "failed to flatten ours tree\n";
+        return 1;
+    }
+    if (!minigit::flatten_tree_to_index(store, tc.tree, itheirs)) {
+        std::cerr << "failed to flatten theirs tree\n";
+        return 1;
+    }
+    std::vector<minigit::IndexEntry> imerged;
+    std::vector<std::string> conflicts;
+    bool ok = minigit::three_way_merge_index(ibase, iours, itheirs, imerged, conflicts);
+    if (!ok) {
+        std::cerr << "merge conflicts:\n";
+        for (const auto& p : conflicts) {
+            std::cerr << "  " << p << "\n";
+        }
+        return 1;
+    }
+    std::string merged_tree = minigit::write_tree_from_index(store, imerged);
+    std::string author = minigit::build_identity_from_env("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE");
+    std::string committer = minigit::build_identity_from_env("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE");
+    minigit::Commit mc;
+    mc.tree = merged_tree;
+    mc.parents = {ours_commit, theirs_commit};
+    mc.author = author;
+    mc.committer = committer;
+    mc.message = "merge " + arg;
+    std::string mh = minigit::write_commit(store, mc);
+    if (head.symbolic) {
+        if (!minigit::update_ref(fs, head.target, mh)) {
+            std::cerr << "failed to update ref: " << head.target << "\n";
+            return 1;
+        }
+    } else {
+        if (!minigit::set_head_detached(fs, mh)) {
+            std::cerr << "failed to update HEAD\n";
+            return 1;
+        }
+    }
+    std::cout << mh << "\n";
+    return 0;
+}
 
 // 程序入口，根据第一个参数选择执行的子命令
 int main(int argc, char** argv) {
+    spdlog::set_level(spdlog::level::info);
     spdlog::set_level(spdlog::level::info);
 
     if (argc < 2) {
@@ -360,6 +503,7 @@ int main(int argc, char** argv) {
         std::cerr << "  write-tree\n";
         std::cerr << "  add <file>\n";
         std::cerr << "  commit -m <message>\n";
+        std::cerr << "  merge <commit|branch>\n";
         std::cerr << "  branch [name]\n";
         std::cerr << "  symbolic-ref HEAD <ref>\n";
         std::cerr << "  status\n";
@@ -379,6 +523,9 @@ int main(int argc, char** argv) {
     }
     if (cmd == "commit") {
         return command_commit(argc, argv);
+    }
+    if (cmd == "merge") {
+        return command_merge(argc, argv);
     }
     if (cmd == "branch") {
         return command_branch(argc, argv);

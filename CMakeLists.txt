@@ -61,6 +61,7 @@ if(MINIGIT_BUILD_TESTS)
         tests/test_index.cpp
         tests/test_commit_from_index.cpp
         tests/test_identity_env.cpp
+        tests/test_merge.cpp
     )
 
     target_link_libraries(minigit_tests

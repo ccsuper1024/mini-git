@@ -398,4 +398,133 @@ std::string write_tree_from_index(ObjectStore& store,
     return dir_hash[std::string()];
 }
 
+static std::string join_paths2(const std::string& a, const std::string& b) {
+    if (a.empty()) return b;
+    if (b.empty()) return a;
+    if (a.back() == '/') return a + b;
+    return a + "/" + b;
+}
+
+bool flatten_tree_to_index(ObjectStore& store,
+                           const std::string& tree_hash,
+                           std::vector<IndexEntry>& entries) {
+    entries.clear();
+    struct Frame {
+        std::string dir;
+        std::string hash;
+    };
+    std::vector<Frame> stack;
+    stack.push_back(Frame{"", tree_hash});
+    while (!stack.empty()) {
+        Frame f = stack.back();
+        stack.pop_back();
+        std::string content;
+        if (!store.read_object(f.hash, content)) {
+            return false;
+        }
+        std::vector<TreeEntry> tes;
+        if (!parse_tree_object(content, tes)) {
+            return false;
+        }
+        for (const auto& e : tes) {
+            if (e.mode == "40000") {
+                stack.push_back(Frame{join_paths2(f.dir, e.name), e.hash});
+            } else if (e.mode == "100644") {
+                IndexEntry ie;
+                ie.mode = e.mode;
+                ie.path = join_paths2(f.dir, e.name);
+                ie.hash = e.hash;
+                entries.push_back(ie);
+            }
+        }
+    }
+    return true;
+}
+
+bool three_way_merge_index(const std::vector<IndexEntry>& base,
+                           const std::vector<IndexEntry>& ours,
+                           const std::vector<IndexEntry>& theirs,
+                           std::vector<IndexEntry>& merged,
+                           std::vector<std::string>& conflicts) {
+    auto to_map = [](const std::vector<IndexEntry>& xs) {
+        std::map<std::string, IndexEntry> m;
+        for (const auto& x : xs) {
+            m[x.path] = x;
+        }
+        return m;
+    };
+    auto Mb = to_map(base);
+    auto Mo = to_map(ours);
+    auto Mt = to_map(theirs);
+    std::set<std::string> paths;
+    for (const auto& kv : Mb) paths.insert(kv.first);
+    for (const auto& kv : Mo) paths.insert(kv.first);
+    for (const auto& kv : Mt) paths.insert(kv.first);
+    merged.clear();
+    conflicts.clear();
+    for (const auto& p : paths) {
+        bool hb = Mb.count(p) > 0;
+        bool ho = Mo.count(p) > 0;
+        bool ht = Mt.count(p) > 0;
+        std::string hbv = hb ? Mb[p].hash : std::string();
+        std::string hov = ho ? Mo[p].hash : std::string();
+        std::string htv = ht ? Mt[p].hash : std::string();
+        if (!hb) {
+            if (ho && !ht) {
+                merged.push_back(Mo[p]);
+                continue;
+            }
+            if (!ho && ht) {
+                merged.push_back(Mt[p]);
+                continue;
+            }
+            if (ho && ht) {
+                if (hov == htv) {
+                    merged.push_back(Mo[p]);
+                } else {
+                    conflicts.push_back(p);
+                }
+                continue;
+            }
+            // none present
+            continue;
+        } else {
+            // hb exists
+            if (ho && ht) {
+                if (hov == htv) {
+                    merged.push_back(Mo[p]);
+                } else if (hov == hbv && htv != hbv) {
+                    merged.push_back(Mt[p]);
+                } else if (htv == hbv && hov != hbv) {
+                    merged.push_back(Mo[p]);
+                } else {
+                    conflicts.push_back(p);
+                }
+                continue;
+            }
+            if (ho && !ht) {
+                if (hov == hbv) {
+                    // only we didn't change? actually unchanged; theirs deleted -> keep ours (unchanged)
+                    merged.push_back(Mo[p]);
+                } else {
+                    // theirs deleted, ours modified -> conflict (delete/modify)
+                    conflicts.push_back(p);
+                }
+                continue;
+            }
+            if (!ho && ht) {
+                if (htv == hbv) {
+                    merged.push_back(Mb[p]);
+                } else {
+                    conflicts.push_back(p);
+                }
+                continue;
+            }
+            // neither side has it -> delete
+            continue;
+        }
+    }
+    return conflicts.empty();
+}
+
 }  // namespace minigit

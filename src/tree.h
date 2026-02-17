@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "object_store.h"
+#include "index.h"
 
 // 本文件声明 tree 对象及目录快照相关接口
 namespace minigit {
@@ -61,5 +62,28 @@ bool parse_tree_object(const std::string& content,
  * @throws std::runtime_error 当文件访问或对象写入发生致命错误时抛出异常。
  */
 std::string write_tree(ObjectStore& store, const std::string& root_dir);
+
+/**
+ * @brief 根据 index 条目构建顶层 tree 并写入对象存储。
+ *
+ * 会解析每个条目的 path，按目录层级递归构建子 tree，文件以 blob 哈希填充，
+ * 目录以子 tree 哈希填充，最终返回顶层目录对应的 tree 哈希。
+ *
+ * @param store   对象存储实例。
+ * @param entries 暂存区条目列表。
+ * @return 顶层 tree 对象的 SHA-1 哈希（40 位十六进制字符串）。
+ */
+std::string write_tree_from_index(ObjectStore& store,
+                                  const std::vector<IndexEntry>& entries);
+
+bool flatten_tree_to_index(ObjectStore& store,
+                           const std::string& tree_hash,
+                           std::vector<IndexEntry>& entries);
+
+bool three_way_merge_index(const std::vector<IndexEntry>& base,
+                           const std::vector<IndexEntry>& ours,
+                           const std::vector<IndexEntry>& theirs,
+                           std::vector<IndexEntry>& merged,
+                           std::vector<std::string>& conflicts);
 
 }  // namespace minigit
