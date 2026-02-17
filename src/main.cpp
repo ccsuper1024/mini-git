@@ -1,13 +1,20 @@
+#include <algorithm>
 #include <fstream>
 #include <iostream>
 #include <iterator>
 #include <string>
-
+#include <vector>
+#
+#include <dirent.h>
+#
 #include <spdlog/spdlog.h>
-
+#
+#include "checkout.h"
+#include "filesystem.h"
 #include "object_store.h"
+#include "refs.h"
 #include "tree.h"
-
+#
 // 本文件实现 mini-git 命令行入口及子命令分发
 namespace {
 
@@ -45,6 +52,198 @@ int command_write_tree(int /*argc*/, char** /*argv*/) {
     return 0;
 }
 
+// 实现 branch 子命令，列出或创建分支
+int command_branch(int argc, char** argv) {
+    minigit::FileSystem fs(".minigit");
+
+    if (argc == 2) {
+        minigit::Head head;
+        bool has_head = minigit::read_head(fs, head);
+        std::string current_ref;
+        if (has_head && head.symbolic) {
+            current_ref = head.target;
+        }
+
+        std::string heads_dir = fs.make_path("refs/heads");
+        DIR* dir = ::opendir(heads_dir.c_str());
+        if (!dir) {
+            return 0;
+        }
+
+        std::vector<std::string> branches;
+        struct dirent* entry = nullptr;
+        while ((entry = ::readdir(dir)) != nullptr) {
+            std::string name = entry->d_name;
+            if (name == "." || name == "..") {
+                continue;
+            }
+            branches.push_back(name);
+        }
+        ::closedir(dir);
+
+        std::sort(branches.begin(), branches.end());
+
+        for (std::size_t i = 0; i < branches.size(); ++i) {
+            std::string refname = "refs/heads/" + branches[i];
+            if (!current_ref.empty() && current_ref == refname) {
+                std::cout << "* " << branches[i] << "\n";
+            } else {
+                std::cout << "  " << branches[i] << "\n";
+            }
+        }
+        return 0;
+    }
+
+    if (argc == 3) {
+        std::string name = argv[2];
+        std::string refname = "refs/heads/" + name;
+
+        minigit::Head head;
+        if (!minigit::read_head(fs, head)) {
+            std::cerr << "HEAD is not set\n";
+            return 1;
+        }
+
+        std::string hash;
+        if (head.symbolic) {
+            if (!minigit::read_ref(fs, head.target, hash)) {
+                std::cerr << "current branch has no commit\n";
+                return 1;
+            }
+        } else {
+            hash = head.target;
+        }
+
+        if (!minigit::update_ref(fs, refname, hash)) {
+            std::cerr << "failed to update ref: " << refname << "\n";
+            return 1;
+        }
+
+        std::cout << name << "\n";
+        return 0;
+    }
+
+    std::cerr << "usage: mini-git branch [name]\n";
+    return 1;
+}
+
+// 实现 symbolic-ref HEAD 子命令，设置 HEAD 指向指定分支
+int command_symbolic_ref(int argc, char** argv) {
+    if (argc != 4) {
+        std::cerr << "usage: mini-git symbolic-ref HEAD <ref>\n";
+        return 1;
+    }
+
+    std::string target = argv[2];
+    if (target != "HEAD") {
+        std::cerr << "only HEAD symbolic ref is supported\n";
+        return 1;
+    }
+
+    std::string refname = argv[3];
+    minigit::FileSystem fs(".minigit");
+
+    if (!minigit::set_head_symbolic(fs, refname)) {
+        std::cerr << "failed to set HEAD\n";
+        return 1;
+    }
+
+    return 0;
+}
+
+// 实现 status 子命令，显示当前分支或游离 HEAD 状态
+int command_status(int /*argc*/, char** /*argv*/) {
+    minigit::FileSystem fs(".minigit");
+    minigit::Head head;
+
+    if (!minigit::read_head(fs, head)) {
+        std::cout << "HEAD is not set\n";
+        return 0;
+    }
+
+    if (head.symbolic) {
+        std::string refname = head.target;
+        std::string branch = refname;
+        const std::string prefix = "refs/heads/";
+        if (branch.compare(0, prefix.size(), prefix) == 0) {
+            branch = branch.substr(prefix.size());
+        }
+
+        std::string hash;
+        bool has_hash = minigit::read_ref(fs, refname, hash);
+
+        std::cout << "On branch " << branch << "\n";
+        if (has_hash) {
+            std::cout << "HEAD commit: " << hash << "\n";
+        } else {
+            std::cout << "HEAD commit: (no commit)\n";
+        }
+    } else {
+        std::string hash = head.target;
+        std::string short_hash = hash;
+        if (short_hash.size() > 7U) {
+            short_hash = short_hash.substr(0, 7U);
+        }
+        std::cout << "HEAD detached at " << short_hash << "\n";
+    }
+
+    return 0;
+}
+
+// 实现 checkout 子命令，根据 HEAD 或显式对象哈希重建工作区
+int command_checkout(int argc, char** argv) {
+    minigit::ObjectStore store(".minigit");
+
+    std::string root_dir = ".";
+
+    if (argc == 2) {
+        bool ok = minigit::checkout_head(store, root_dir);
+        if (!ok) {
+            std::cerr << "checkout HEAD failed\n";
+            return 1;
+        }
+        return 0;
+    }
+
+    if (argc == 3) {
+        std::string arg = argv[2];
+        if (arg.size() == 40U) {
+            bool ok = minigit::checkout_commit(store, root_dir, arg);
+            if (!ok) {
+                ok = minigit::checkout_tree(store, root_dir, arg);
+            }
+            if (!ok) {
+                std::cerr << "checkout " << arg << " failed\n";
+                return 1;
+            }
+            return 0;
+        }
+
+        std::string refname = "refs/heads/" + arg;
+        minigit::FileSystem fs(".minigit");
+        std::string hash;
+        if (!minigit::read_ref(fs, refname, hash)) {
+            std::cerr << "unknown revision: " << arg << "\n";
+            return 1;
+        }
+
+        if (!minigit::checkout_commit(store, root_dir, hash)) {
+            std::cerr << "checkout " << arg << " failed\n";
+            return 1;
+        }
+
+        if (!minigit::set_head_symbolic(fs, refname)) {
+            std::cerr << "failed to update HEAD\n";
+            return 1;
+        }
+
+        return 0;
+    }
+
+    std::cerr << "usage: mini-git checkout [<branch>|<hash>]\n";
+    return 1;
+}
+
 }  // namespace
 
 // 程序入口，根据第一个参数选择执行的子命令
@@ -56,6 +255,10 @@ int main(int argc, char** argv) {
         std::cerr << "commands:\n";
         std::cerr << "  hash-object <file>\n";
         std::cerr << "  write-tree\n";
+        std::cerr << "  branch [name]\n";
+        std::cerr << "  symbolic-ref HEAD <ref>\n";
+        std::cerr << "  status\n";
+        std::cerr << "  checkout [<branch>|<hash>]\n";
         return 1;
     }
 
@@ -65,6 +268,18 @@ int main(int argc, char** argv) {
     }
     if (cmd == "write-tree") {
         return command_write_tree(argc, argv);
+    }
+    if (cmd == "branch") {
+        return command_branch(argc, argv);
+    }
+    if (cmd == "symbolic-ref") {
+        return command_symbolic_ref(argc, argv);
+    }
+    if (cmd == "status") {
+        return command_status(argc, argv);
+    }
+    if (cmd == "checkout") {
+        return command_checkout(argc, argv);
     }
 
     std::cerr << "unknown command: " << cmd << "\n";

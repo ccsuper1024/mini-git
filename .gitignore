@@ -1,30 +1,23 @@
-# 通用编辑器/系统临时文件
-*.swp
-*.swo
-*~
-.DS_Store
+build/
+cmake-build-*/
+CMakeFiles/
+CMakeCache.txt
+cmake_install.cmake
+Makefile
+Testing/
 
-# CMake 构建产物
-/build/
-/CMakeCache.txt
-/CMakeFiles/
-/cmake-build-*/
-/*.cmake
-
-# 编译生成的二进制/库文件
 *.o
 *.obj
 *.a
 *.so
 *.dll
-*.dylib
-/*.exe
-/minigit_cli
-/minigit_tests
+*.exe
 
-# 日志和临时输出
-*.log
+*.swp
+*.swo
+*~
+.DS_Store
 
-# mini-git 自身的数据目录
-/.minigit/
+.vscode/
+.idea/
 

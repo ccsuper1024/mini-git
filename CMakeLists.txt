@@ -24,6 +24,8 @@ add_library(minigit
     src/object_store.cpp
     src/tree.cpp
     src/commit.cpp
+    src/refs.cpp
+    src/checkout.cpp
 )
 
 target_include_directories(minigit
@@ -53,6 +55,8 @@ if(MINIGIT_BUILD_TESTS)
         tests/test_object_store.cpp
         tests/test_tree.cpp
         tests/test_commit.cpp
+        tests/test_refs.cpp
+        tests/test_checkout.cpp
     )
 
     target_link_libraries(minigit_tests

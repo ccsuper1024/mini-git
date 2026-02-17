@@ -17,23 +17,8 @@ Phase 9  网络同步
 使用spdlog库进行日志记录
 使用googletest库进行单元测试
 使用git进行版本控制
-对每一个函数和文件都要进行合理的中文注释，按照大厂风格进行注释
-
-测试与回测要求：
-1）每个 Phase 完成后必须编写或更新单元测试，保证对新增代码有充分覆盖；
-2）每个 Phase 完成后必须执行回测脚本 backtest.sh，包含：
-    - 重新配置并编译工程（cmake + build）；
-    - 运行 ctest --output-on-failure；
-    - 运行基于 CLI 的端到端场景回测（hash-object、write-tree 等）；
-3）后续如引入新的命令或模块，应在回测脚本中补充分场景用例，持续提高覆盖率；
-4）每个 Phase 通过单元测试与回测后，必须将代码提交并推送到远程仓库：
-    仓库地址：git@github.com:ccsuper1024/mini-git.git
-
-版本控制与 .gitignore 要求：
-1）仓库必须提供 .gitignore 文件，忽略以下类型文件与目录：
-    - CMake 构建目录与中间文件（如 build/、CMakeFiles/ 等）；
-    - 编译生成的目标文件和二进制（如 *.o、*.a、minigit_cli、minigit_tests 等）；
-    - mini-git 自身的数据目录（.minigit/）；
-    - 各类编辑器、系统临时文件和日志文件；
-2）推送到远程仓库时，只提交必要的源代码、构建配置、测试代码、回测脚本及需求文档，
-    避免提交构建产物、临时文件和本地数据目录。
+仓库根目录维护 .gitignore，只提交和推送必要的源代码、构建脚本和测试代码，不提交构建产物、临时文件和本地 IDE 配置
+远程仓库统一使用 git@github.com:ccsuper1024/mini-git.git
+后续每一个 Phase 在实现新功能时，必须同时补充单元测试，并在提交前完整执行一次测试回归（例如通过 ctest 运行所有测试），确保全部通过
+对每一个函数和文件都要进行合理的中文注释，按照大厂风格进行注释，并且进行 git 提交
+每一个 Phase 完成后，都需要将变更进行 git 提交并推送到远程仓库（git@github.com:ccsuper1024/mini-git.git）
