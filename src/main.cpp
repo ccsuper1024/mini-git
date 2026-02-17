@@ -17,6 +17,7 @@
 #include "refs.h"
 #include "tree.h"
 #include <set>
+#include <map>
 
 // 本文件实现 mini-git 命令行入口及子命令分发
 namespace {
@@ -403,12 +404,54 @@ static std::string find_common_ancestor(minigit::ObjectStore& store,
     return std::string();
 }
 
+static bool is_ancestor(minigit::ObjectStore& store,
+                        const std::string& anc,
+                        const std::string& desc) {
+    std::vector<std::string> stack;
+    stack.push_back(desc);
+    std::set<std::string> visited;
+    while (!stack.empty()) {
+        std::string x = stack.back();
+        stack.pop_back();
+        if (x == anc) return true;
+        if (visited.count(x)) continue;
+        visited.insert(x);
+        minigit::Commit c;
+        if (!read_commit(store, x, c)) continue;
+        for (const auto& p : c.parents) {
+            stack.push_back(p);
+        }
+    }
+    return false;
+}
+
 int command_merge(int argc, char** argv) {
-    if (argc != 3) {
-        std::cerr << "usage: mini-git merge <commit|branch>\n";
+    if (argc < 3) {
+        std::cerr << "usage: mini-git merge [--no-ff|--ff-only] [--ours|--theirs] <commit|branch>\n";
         return 1;
     }
-    std::string arg = argv[2];
+    bool no_ff = false;
+    bool ff_only = false;
+    enum { RES_NONE, RES_OURS, RES_THEIRS } resolve = RES_NONE;
+    std::string target;
+    for (int i = 2; i < argc; ++i) {
+        std::string a = argv[i];
+        if (a == "--no-ff") {
+            no_ff = true;
+        } else if (a == "--ff-only") {
+            ff_only = true;
+        } else if (a == "--ours") {
+            resolve = RES_OURS;
+        } else if (a == "--theirs") {
+            resolve = RES_THEIRS;
+        } else {
+            target = a;
+        }
+    }
+    if (target.empty()) {
+        std::cerr << "merge: missing <commit|branch>\n";
+        return 1;
+    }
     minigit::FileSystem fs(".minigit");
     minigit::ObjectStore store(".minigit");
     minigit::Head head;
@@ -425,14 +468,40 @@ int command_merge(int argc, char** argv) {
     } else {
         ours_commit = head.target;
     }
-    std::string theirs_commit = resolve_target_commit_hash(fs, arg);
+    std::string theirs_commit = resolve_target_commit_hash(fs, target);
     if (theirs_commit.empty()) {
-        std::cerr << "unknown revision: " << arg << "\n";
+        std::cerr << "unknown revision: " << target << "\n";
         return 1;
     }
     minigit::Commit oc, tc;
     if (!read_commit(store, ours_commit, oc) || !read_commit(store, theirs_commit, tc)) {
         std::cerr << "failed to read commits\n";
+        return 1;
+    }
+    // Fast-forward checks
+    bool can_ff = is_ancestor(store, ours_commit, theirs_commit);
+    if (can_ff && !no_ff) {
+        if (head.symbolic) {
+            if (!minigit::update_ref(fs, head.target, theirs_commit)) {
+                std::cerr << "failed to update ref: " << head.target << "\n";
+                return 1;
+            }
+        } else {
+            if (!minigit::set_head_detached(fs, theirs_commit)) {
+                std::cerr << "failed to update HEAD\n";
+                return 1;
+            }
+        }
+        bool ok_co = minigit::checkout_commit(store, ".", theirs_commit);
+        if (!ok_co) {
+            std::cerr << "checkout merged result failed\n";
+            return 1;
+        }
+        std::cout << theirs_commit << "\n";
+        return 0;
+    }
+    if (ff_only && !can_ff) {
+        std::cerr << "merge: not fast-forward\n";
         return 1;
     }
     std::string base = find_common_ancestor(store, ours_commit, theirs_commit);
@@ -460,11 +529,29 @@ int command_merge(int argc, char** argv) {
     std::vector<std::string> conflicts;
     bool ok = minigit::three_way_merge_index(ibase, iours, itheirs, imerged, conflicts);
     if (!ok) {
-        std::cerr << "merge conflicts:\n";
-        for (const auto& p : conflicts) {
-            std::cerr << "  " << p << "\n";
+        if (resolve == RES_NONE) {
+            std::cerr << "merge conflicts:\n";
+            for (const auto& p : conflicts) {
+                std::cerr << "  " << p << "\n";
+            }
+            return 1;
         }
-        return 1;
+        // apply quick resolution strategy
+        auto to_map = [](const std::vector<minigit::IndexEntry>& xs) {
+            std::map<std::string, minigit::IndexEntry> m;
+            for (const auto& x : xs) m[x.path] = x;
+            return m;
+        };
+        auto Mo = to_map(iours);
+        auto Mt = to_map(itheirs);
+        for (const auto& p : conflicts) {
+            if (resolve == RES_OURS && Mo.count(p)) {
+                imerged.push_back(Mo[p]);
+            } else if (resolve == RES_THEIRS && Mt.count(p)) {
+                imerged.push_back(Mt[p]);
+            }
+        }
+        conflicts.clear();
     }
     std::string merged_tree = minigit::write_tree_from_index(store, imerged);
     std::string author = minigit::build_identity_from_env("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE");
@@ -474,7 +561,7 @@ int command_merge(int argc, char** argv) {
     mc.parents = {ours_commit, theirs_commit};
     mc.author = author;
     mc.committer = committer;
-    mc.message = "merge " + arg;
+    mc.message = "merge " + target;
     std::string mh = minigit::write_commit(store, mc);
     if (head.symbolic) {
         if (!minigit::update_ref(fs, head.target, mh)) {
@@ -486,6 +573,11 @@ int command_merge(int argc, char** argv) {
             std::cerr << "failed to update HEAD\n";
             return 1;
         }
+    }
+    bool ok_co = minigit::checkout_commit(store, ".", mh);
+    if (!ok_co) {
+        std::cerr << "checkout merged result failed\n";
+        return 1;
     }
     std::cout << mh << "\n";
     return 0;
