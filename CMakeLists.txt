@@ -59,6 +59,7 @@ if(MINIGIT_BUILD_TESTS)
         tests/test_refs.cpp
         tests/test_checkout.cpp
         tests/test_index.cpp
+        tests/test_commit_from_index.cpp
     )
 
     target_link_libraries(minigit_tests

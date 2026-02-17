@@ -10,6 +10,7 @@
 #include <spdlog/spdlog.h>
 
 #include "checkout.h"
+#include "commit.h"
 #include "filesystem.h"
 #include "index.h"
 #include "object_store.h"
@@ -287,6 +288,67 @@ int command_add(int argc, char** argv) {
     return 0;
 }
 
+// 实现 commit 子命令：从 index 构建 tree，生成 commit 并更新当前分支
+int command_commit(int argc, char** argv) {
+    if (argc < 4 || std::string(argv[2]) != "-m") {
+        std::cerr << "usage: mini-git commit -m <message>\n";
+        return 1;
+    }
+    std::string message = argv[3];
+
+    minigit::FileSystem fs(".minigit");
+    std::vector<minigit::IndexEntry> entries;
+    if (!minigit::read_index(fs, entries)) {
+        std::cerr << "failed to read index\n";
+        return 1;
+    }
+
+    minigit::ObjectStore store(".minigit");
+    std::string tree_hash = minigit::write_tree_from_index(store, entries);
+
+    minigit::Head head;
+    bool has_head = minigit::read_head(fs, head);
+    std::vector<std::string> parents;
+    if (has_head) {
+        if (head.symbolic) {
+            std::string parent_hash;
+            if (minigit::read_ref(fs, head.target, parent_hash)) {
+                parents.push_back(parent_hash);
+            }
+        } else {
+            parents.push_back(head.target);
+        }
+    }
+
+    std::time_t now = std::time(nullptr);
+    long epoch = static_cast<long>(now);
+    std::string author = "User <user@example.com> " + std::to_string(epoch) + " +0000";
+    std::string committer = author;
+
+    minigit::Commit c;
+    c.tree = tree_hash;
+    c.parents = parents;
+    c.author = author;
+    c.committer = committer;
+    c.message = message;
+
+    std::string commit_hash = minigit::write_commit(store, c);
+
+    if (has_head && head.symbolic) {
+        if (!minigit::update_ref(fs, head.target, commit_hash)) {
+            std::cerr << "failed to update ref: " << head.target << "\n";
+            return 1;
+        }
+    } else {
+        if (!minigit::set_head_detached(fs, commit_hash)) {
+            std::cerr << "failed to update HEAD\n";
+            return 1;
+        }
+    }
+
+    std::cout << commit_hash << "\n";
+    return 0;
+}
 }  // namespace
 
 // 程序入口，根据第一个参数选择执行的子命令
@@ -299,6 +361,7 @@ int main(int argc, char** argv) {
         std::cerr << "  hash-object <file>\n";
         std::cerr << "  write-tree\n";
         std::cerr << "  add <file>\n";
+        std::cerr << "  commit -m <message>\n";
         std::cerr << "  branch [name]\n";
         std::cerr << "  symbolic-ref HEAD <ref>\n";
         std::cerr << "  status\n";
@@ -315,6 +378,9 @@ int main(int argc, char** argv) {
     }
     if (cmd == "add") {
         return command_add(argc, argv);
+    }
+    if (cmd == "commit") {
+        return command_commit(argc, argv);
     }
     if (cmd == "branch") {
         return command_branch(argc, argv);

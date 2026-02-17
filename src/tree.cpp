@@ -10,6 +10,8 @@
 #include <sys/stat.h>
 #include <sys/types.h>
 #include <unistd.h>
+#include <map>
+#include <set>
 #include <vector>
 
 // 本文件实现 tree 对象的构造、解析以及目录快照写入逻辑
@@ -272,6 +274,128 @@ bool parse_tree_object(const std::string& content,
 
 std::string write_tree(ObjectStore& store, const std::string& root_dir) {
     return write_tree_recursive(store, root_dir);
+}
+
+// 根据 index 条目构建顶层 tree 并写入对象存储
+std::string write_tree_from_index(ObjectStore& store,
+                                  const std::vector<IndexEntry>& entries) {
+    // 构建目录到其直接条目的映射，以及目录层级关系
+    // key 使用以 '/' 分隔的相对目录路径，根目录使用空字符串 ""
+    std::map<std::string, std::vector<TreeEntry>> dir_items;
+    std::set<std::string> all_dirs;
+
+    auto dirname = [](const std::string& path) -> std::string {
+        std::size_t pos = path.find_last_of("/\\");
+        if (pos == std::string::npos) {
+            return std::string();
+        }
+        return path.substr(0, pos);
+    };
+    auto basename = [](const std::string& path) -> std::string {
+        std::size_t pos = path.find_last_of("/\\");
+        if (pos == std::string::npos) {
+            return path;
+        }
+        return path.substr(pos + 1);
+    };
+    auto split_dirs = [](const std::string& dir) -> std::vector<std::string> {
+        std::vector<std::string> parts;
+        std::size_t start = 0;
+        while (start < dir.size()) {
+            std::size_t pos = dir.find('/', start);
+            if (pos == std::string::npos) {
+                parts.push_back(dir.substr(start));
+                break;
+            }
+            parts.push_back(dir.substr(start, pos - start));
+            start = pos + 1;
+        }
+        return parts;
+    };
+
+    // 收集所有目录并将文件条目放入其父目录的直接条目列表
+    all_dirs.insert(std::string());  // 根目录
+    for (std::size_t i = 0; i < entries.size(); ++i) {
+        const IndexEntry& ie = entries[i];
+        std::string dir = dirname(ie.path);
+        std::string base = basename(ie.path);
+        dir_items[dir].push_back(TreeEntry{"100644", base, ie.hash});
+        if (!dir.empty()) {
+            all_dirs.insert(dir);
+            // 补充祖先目录
+            std::vector<std::string> parts = split_dirs(dir);
+            std::string cur;
+            for (std::size_t k = 0; k < parts.size(); ++k) {
+                if (cur.empty()) {
+                    cur = parts[k];
+                } else {
+                    cur = cur + "/" + parts[k];
+                }
+                all_dirs.insert(cur);
+            }
+        }
+    }
+
+    // 构建父->子目录映射
+    std::map<std::string, std::set<std::string>> children;
+    for (const std::string& d : all_dirs) {
+        if (d.empty()) continue;
+        std::string parent = dirname(d);
+        std::string name = basename(d);
+        children[parent].insert(name);
+    }
+
+    // 按深度从深到浅排序目录
+    std::vector<std::pair<std::string, int>> dirs_with_depth;
+    dirs_with_depth.reserve(all_dirs.size());
+    for (const std::string& d : all_dirs) {
+        int depth = 0;
+        if (!d.empty()) {
+            for (char c : d) {
+                if (c == '/') ++depth;
+            }
+            depth += 1;  // 目录名本身作为一级
+        }
+        dirs_with_depth.push_back({d, depth});
+    }
+    std::sort(dirs_with_depth.begin(), dirs_with_depth.end(),
+              [](const std::pair<std::string, int>& a,
+                 const std::pair<std::string, int>& b) {
+                  return a.second > b.second;
+              });
+
+    // 存放每个目录对应的 tree 哈希
+    std::map<std::string, std::string> dir_hash;
+
+    for (std::size_t i = 0; i < dirs_with_depth.size(); ++i) {
+        const std::string& d = dirs_with_depth[i].first;
+        std::vector<TreeEntry> items = dir_items[d];  // 文件条目
+
+        // 加入子目录条目
+        auto it = children.find(d);
+        if (it != children.end()) {
+            for (const std::string& child_name : it->second) {
+                std::string child_path =
+                    d.empty() ? child_name : (d + "/" + child_name);
+                std::string child_hash = dir_hash[child_path];
+                items.push_back(TreeEntry{"40000", child_name, child_hash});
+            }
+        }
+
+        // 对条目按名称排序，保证稳定性
+        std::sort(items.begin(), items.end(),
+                  [](const TreeEntry& a, const TreeEntry& b) {
+                      return a.name < b.name;
+                  });
+
+        // 构建并存储当前目录的 tree 对象
+        std::string content = build_tree_object(items);
+        std::string hash = store.store_tree(content);
+        dir_hash[d] = hash;
+    }
+
+    // 返回根目录的 tree 哈希
+    return dir_hash[std::string()];
 }
 
 }  // namespace minigit
