@@ -4,17 +4,18 @@
 #include <iterator>
 #include <string>
 #include <vector>
-#
+
 #include <dirent.h>
-#
+
 #include <spdlog/spdlog.h>
-#
+
 #include "checkout.h"
 #include "filesystem.h"
+#include "index.h"
 #include "object_store.h"
 #include "refs.h"
 #include "tree.h"
-#
+
 // 本文件实现 mini-git 命令行入口及子命令分发
 namespace {
 
@@ -244,6 +245,48 @@ int command_checkout(int argc, char** argv) {
     return 1;
 }
 
+// 实现 add 子命令，将指定路径的文件加入暂存区
+int command_add(int argc, char** argv) {
+    if (argc < 3) {
+        std::cerr << "usage: mini-git add <file>\n";
+        return 1;
+    }
+
+    std::string path = argv[2];
+
+    std::ifstream ifs(path.c_str(), std::ios::binary);
+    if (!ifs) {
+        std::cerr << "failed to open file: " << path << "\n";
+        return 1;
+    }
+
+    std::string data((std::istreambuf_iterator<char>(ifs)),
+                     std::istreambuf_iterator<char>());
+
+    minigit::ObjectStore store(".minigit");
+    std::string hash = store.store_blob(data);
+
+    minigit::FileSystem fs(".minigit");
+    std::vector<minigit::IndexEntry> entries;
+    if (!minigit::read_index(fs, entries)) {
+        std::cerr << "failed to read index\n";
+        return 1;
+    }
+
+    minigit::IndexEntry e;
+    e.mode = "100644";
+    e.path = path;
+    e.hash = hash;
+    minigit::upsert_index_entry(entries, e);
+
+    if (!minigit::write_index(fs, entries)) {
+        std::cerr << "failed to write index\n";
+        return 1;
+    }
+
+    return 0;
+}
+
 }  // namespace
 
 // 程序入口，根据第一个参数选择执行的子命令
@@ -255,6 +298,7 @@ int main(int argc, char** argv) {
         std::cerr << "commands:\n";
         std::cerr << "  hash-object <file>\n";
         std::cerr << "  write-tree\n";
+        std::cerr << "  add <file>\n";
         std::cerr << "  branch [name]\n";
         std::cerr << "  symbolic-ref HEAD <ref>\n";
         std::cerr << "  status\n";
@@ -268,6 +312,9 @@ int main(int argc, char** argv) {
     }
     if (cmd == "write-tree") {
         return command_write_tree(argc, argv);
+    }
+    if (cmd == "add") {
+        return command_add(argc, argv);
     }
     if (cmd == "branch") {
         return command_branch(argc, argv);

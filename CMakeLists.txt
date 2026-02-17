@@ -26,6 +26,7 @@ add_library(minigit
     src/commit.cpp
     src/refs.cpp
     src/checkout.cpp
+    src/index.cpp
 )
 
 target_include_directories(minigit
@@ -57,6 +58,7 @@ if(MINIGIT_BUILD_TESTS)
         tests/test_commit.cpp
         tests/test_refs.cpp
         tests/test_checkout.cpp
+        tests/test_index.cpp
     )
 
     target_link_libraries(minigit_tests
