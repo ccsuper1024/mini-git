@@ -320,10 +320,8 @@ int command_commit(int argc, char** argv) {
         }
     }
 
-    std::time_t now = std::time(nullptr);
-    long epoch = static_cast<long>(now);
-    std::string author = "User <user@example.com> " + std::to_string(epoch) + " +0000";
-    std::string committer = author;
+    std::string author = minigit::build_identity_from_env("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE");
+    std::string committer = minigit::build_identity_from_env("GIT_COMMITTER_NAME", "GIT_COMMITTER_EMAIL", "GIT_COMMITTER_DATE");
 
     minigit::Commit c;
     c.tree = tree_hash;

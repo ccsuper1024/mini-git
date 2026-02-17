@@ -119,3 +119,70 @@ std::string write_commit(ObjectStore& store, const Commit& commit) {
 
 }  // namespace minigit
 
+#include <ctime>
+#include <unistd.h>
+#include <pwd.h>
+#include <sys/types.h>
+#include <cstdlib>
+#include <cstdio>
+
+namespace minigit {
+
+static std::string default_user_name() {
+    struct passwd* pw = getpwuid(getuid());
+    if (pw && pw->pw_gecos && pw->pw_gecos[0] != '\0') {
+        std::string gecos(pw->pw_gecos);
+        std::size_t pos = gecos.find(',');
+        if (pos != std::string::npos) {
+            gecos = gecos.substr(0, pos);
+        }
+        return gecos;
+    }
+    if (pw && pw->pw_name) {
+        return std::string(pw->pw_name);
+    }
+    return "unknown";
+}
+
+static std::string default_user_email() {
+    struct passwd* pw = getpwuid(getuid());
+    const char* uname = (pw && pw->pw_name) ? pw->pw_name : "user";
+    char host[256] = {0};
+    if (gethostname(host, sizeof(host) - 1) != 0 || host[0] == '\0') {
+        std::snprintf(host, sizeof(host), "localhost");
+    }
+    return std::string(uname) + "@" + std::string(host);
+}
+
+static std::string epoch_with_offset() {
+    std::time_t now = std::time(nullptr);
+    std::tm lt;
+    localtime_r(&now, &lt);
+#ifdef __GLIBC__
+    long off = lt.tm_gmtoff;
+#else
+    long off = 0;
+#endif
+    char sign = off >= 0 ? '+' : '-';
+    if (off < 0) off = -off;
+    int hh = static_cast<int>(off / 3600);
+    int mm = static_cast<int>((off % 3600) / 60);
+    char buf[32];
+    std::snprintf(buf, sizeof(buf), "%ld %c%02d%02d", static_cast<long>(now), sign, hh, mm);
+    return std::string(buf);
+}
+
+static std::string env_or(const char* key, const std::string& defval) {
+    const char* v = std::getenv(key);
+    if (v && v[0] != '\0') return std::string(v);
+    return defval;
+}
+
+std::string build_identity_from_env(const char* name_env, const char* email_env, const char* date_env) {
+    std::string name = env_or(name_env, default_user_name());
+    std::string email = env_or(email_env, default_user_email());
+    std::string date = env_or(date_env, epoch_with_offset());
+    return name + " <" + email + "> " + date;
+}
+
+}  // namespace minigit

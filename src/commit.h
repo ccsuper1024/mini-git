@@ -67,5 +67,6 @@ bool parse_commit_object(const std::string& content, Commit& commit);
  */
 std::string write_commit(ObjectStore& store, const Commit& commit);
 
-}  // namespace minigit
+std::string build_identity_from_env(const char* name_env, const char* email_env, const char* date_env);
 
+}  // namespace minigit

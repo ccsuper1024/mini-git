@@ -60,6 +60,7 @@ if(MINIGIT_BUILD_TESTS)
         tests/test_checkout.cpp
         tests/test_index.cpp
         tests/test_commit_from_index.cpp
+        tests/test_identity_env.cpp
     )
 
     target_link_libraries(minigit_tests
