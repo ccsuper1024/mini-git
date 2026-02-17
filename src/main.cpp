@@ -16,6 +16,7 @@
 #include "object_store.h"
 #include "refs.h"
 #include "tree.h"
+#include "pack.h"
 #include <set>
 #include <map>
 
@@ -583,6 +584,21 @@ int command_merge(int argc, char** argv) {
     return 0;
 }
 
+int command_pack(int argc, char** argv) {
+    if (argc != 2) {
+        std::cerr << "usage: mini-git pack\n";
+        return 1;
+    }
+    minigit::FileSystem fs(".minigit");
+    bool ok = minigit::write_pack_file(fs, "objects/pack/pack.mpk");
+    if (!ok) {
+        std::cerr << "no objects to pack\n";
+        return 1;
+    }
+    std::cout << "objects packed to objects/pack/pack.mpk\n";
+    return 0;
+}
+
 // 程序入口，根据第一个参数选择执行的子命令
 int main(int argc, char** argv) {
     spdlog::set_level(spdlog::level::info);
@@ -600,6 +616,7 @@ int main(int argc, char** argv) {
         std::cerr << "  symbolic-ref HEAD <ref>\n";
         std::cerr << "  status\n";
         std::cerr << "  checkout [<branch>|<hash>]\n";
+        std::cerr << "  pack\n";
         return 1;
     }
 
@@ -630,6 +647,9 @@ int main(int argc, char** argv) {
     }
     if (cmd == "checkout") {
         return command_checkout(argc, argv);
+    }
+    if (cmd == "pack") {
+        return command_pack(argc, argv);
     }
 
     std::cerr << "unknown command: " << cmd << "\n";
