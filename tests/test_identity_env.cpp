@@ -23,3 +23,21 @@ TEST(IdentityEnvTest, CommitUsesIdentityString) {
     ASSERT_NE(content.find("author " + c.author + "\n"), std::string::npos);
     ASSERT_NE(content.find("committer " + c.committer + "\n"), std::string::npos);
 }
+
+TEST(IdentityEnvTest, AuthorDateRfc2822Normalized) {
+    setenv("GIT_AUTHOR_NAME", "Bob", 1);
+    setenv("GIT_AUTHOR_EMAIL", "bob@example.com", 1);
+    setenv("GIT_AUTHOR_DATE", "Fri Apr 02 08:00:00 2021 +0800", 1);
+    std::string author = minigit::build_identity_from_env("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE");
+    ASSERT_NE(author.find("Bob <bob@example.com> "), std::string::npos);
+    ASSERT_NE(author.find(" +0800"), std::string::npos);
+}
+
+TEST(IdentityEnvTest, AuthorDateIso8601Normalized) {
+    setenv("GIT_AUTHOR_NAME", "Carol", 1);
+    setenv("GIT_AUTHOR_EMAIL", "carol@example.com", 1);
+    setenv("GIT_AUTHOR_DATE", "2021-04-02T08:00:00+08:00", 1);
+    std::string author = minigit::build_identity_from_env("GIT_AUTHOR_NAME", "GIT_AUTHOR_EMAIL", "GIT_AUTHOR_DATE");
+    ASSERT_NE(author.find("Carol <carol@example.com> "), std::string::npos);
+    ASSERT_NE(author.find(" +0800"), std::string::npos);
+}
